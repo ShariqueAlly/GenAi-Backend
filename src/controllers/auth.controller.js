@@ -105,6 +105,7 @@ async function loginController(req, res){
     res.cookie("token", token, authCookieOptions)
     res.status(201).json({
         message:"user loggedIn successfully",
+        token,
         user:{
             id:user._id,
             username:user.username,
@@ -118,7 +119,11 @@ async function loginController(req, res){
  * @name logout
  */
 async function logoutController(req, res){
-    const token = req.cookies.token
+    const authHeader = req.headers.authorization;
+    const bearerToken = authHeader && authHeader.startsWith("Bearer ")
+        ? authHeader.slice(7)
+        : null;
+    const token = req.cookies.token || bearerToken;
 
     if(token){
         await tokenBlackListModel.create({token})
