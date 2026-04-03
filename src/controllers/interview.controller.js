@@ -145,9 +145,10 @@ async function downloadInterviewReportPdfController(req, res){
       await interviewReport.save();
     }
 
+    const inline = req.query?.inline === "1";
     res.set({
       "Content-Type":"application/pdf",
-      "Content-Disposition":`attachment; filename=interview_report_${interviewId}.pdf`,
+      "Content-Disposition":`${inline ? "inline" : "attachment"}; filename=interview_report_${interviewId}.pdf`,
       "Cache-Control":"private, max-age=31536000, immutable"
     })
     return res.send(pdfBuffer);
