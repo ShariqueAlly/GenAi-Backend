@@ -1,7 +1,9 @@
 require("dotenv").config();
 const { GoogleGenerativeAI } = require("@google/generative-ai");
 const { z } = require("zod/v3");
-const puppeteer = require("puppeteer");
+const isProduction = process.env.NODE_ENV === "production";
+const puppeteer = isProduction ? require("puppeteer-core") : require("puppeteer");
+const chromium = isProduction ? require("@sparticuz/chromium") : null;
 
 if (!process.env.GOOGLE_GENAI_API_KEY) {
   throw new Error("GOOGLE_GENAI_API_KEY is missing. Please set it in backend/.env");
@@ -128,10 +130,19 @@ async function generateInterviewReport({resume, jobDescription, selfDescription}
 }
 
 async function generatePdfFromHtml(htmlContent){
-   const browser = await puppeteer.launch({
-      args: ["--no-sandbox", "--disable-setuid-sandbox"],
-      headless: "new",
-   });
+   const launchOptions = isProduction
+      ? {
+         args: chromium.args,
+         defaultViewport: chromium.defaultViewport,
+         executablePath: await chromium.executablePath(),
+         headless: chromium.headless,
+        }
+      : {
+         args: ["--no-sandbox", "--disable-setuid-sandbox"],
+         headless: "new",
+        };
+
+   const browser = await puppeteer.launch(launchOptions);
    const page = await browser.newPage();
    await page.setContent(htmlContent, { waitUntil: "networkidle0", timeout: 30000 });
    const pdfBuffer = await page.pdf({ format: "A4", printBackground: true });
