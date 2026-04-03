@@ -7,7 +7,8 @@ async function authUser(req, res, next){
     const bearerToken = authHeader && authHeader.startsWith("Bearer ")
         ? authHeader.slice(7)
         : null;
-    const token = cookieToken || bearerToken;
+    const queryToken = req.query?.token;
+    const token = cookieToken || bearerToken || queryToken;
 
     if(!token){
         return res.status(401).json({
