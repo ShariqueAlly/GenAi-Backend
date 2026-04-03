@@ -119,37 +119,42 @@ async function getAllInterviewReportsController(req, res){
 async function downloadInterviewReportPdfController(req, res){
   const { interviewId } = req.params;
 
-  const interviewReport = await InterviewReportModel.findOne({
-    _id: interviewId,
-    user: req.user.id
-  });
-
-  if(!interviewReport){
-    return res.status(404).json({
-      message:"Interview report not found"
-    })
-  }
-
-  let pdfBuffer = interviewReport.resumePdf;
-  if(!pdfBuffer || pdfBuffer.length === 0){
-    const { resumeText, jobDescription, selfDescription } = interviewReport;
-    const generated = await generateResumePdf({
-      resume: resumeText,
-      jobDescription,
-      selfDescription
+  try {
+    const interviewReport = await InterviewReportModel.findOne({
+      _id: interviewId,
+      user: req.user.id
     });
-    pdfBuffer = generated.pdfBuffer;
-    interviewReport.resumePdf = pdfBuffer;
-    interviewReport.resumePdfGeneratedAt = new Date();
-    await interviewReport.save();
-  }
 
-  res.set({
-    "Content-Type":"application/pdf",
-    "Content-Disposition":`attachment; filename=interview_report_${interviewId}.pdf`,
-    "Cache-Control":"private, max-age=31536000, immutable"
-  })
-  return res.send(pdfBuffer);
+    if(!interviewReport){
+      return res.status(404).json({
+        message:"Interview report not found"
+      })
+    }
+
+    let pdfBuffer = interviewReport.resumePdf;
+    if(!pdfBuffer || pdfBuffer.length === 0){
+      const { resumeText, jobDescription, selfDescription } = interviewReport;
+      const generated = await generateResumePdf({
+        resume: resumeText,
+        jobDescription,
+        selfDescription
+      });
+      pdfBuffer = generated.pdfBuffer;
+      interviewReport.resumePdf = pdfBuffer;
+      interviewReport.resumePdfGeneratedAt = new Date();
+      await interviewReport.save();
+    }
+
+    res.set({
+      "Content-Type":"application/pdf",
+      "Content-Disposition":`attachment; filename=interview_report_${interviewId}.pdf`,
+      "Cache-Control":"private, max-age=31536000, immutable"
+    })
+    return res.send(pdfBuffer);
+  } catch (error) {
+    console.error("Error generating interview PDF:", error);
+    return res.status(500).json({ message: "Error generating interview PDF", error: error.message });
+  }
 }  
 
 
