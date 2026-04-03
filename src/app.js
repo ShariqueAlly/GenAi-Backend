@@ -2,6 +2,7 @@ const express = require("express");
 
 
 const app = express();
+app.set("trust proxy", 1);
 app.use(express.json())
 
 const cors = require("cors");

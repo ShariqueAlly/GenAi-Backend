@@ -3,10 +3,11 @@ const bcrypt = require("bcrypt");
 const jwt = require("jsonwebtoken");
 const tokenBlackListModel = require("../model/blacklist.model")
 
+const isProduction = process.env.NODE_ENV === "production";
 const authCookieOptions = {
     httpOnly: true,
-    sameSite: "lax",
-    secure: false,
+    sameSite: isProduction ? "none" : "lax",
+    secure: isProduction,
     path: "/",
 };
 
