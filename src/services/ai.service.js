@@ -4,11 +4,101 @@ const { z } = require("zod/v3");
 const isProduction = process.env.NODE_ENV === "production";
 const puppeteer = isProduction ? require("puppeteer-core") : require("puppeteer");
 const chromium = isProduction ? require("@sparticuz/chromium") : null;
+const genAiApiKey = process.env.GOOGLE_GENAI_API_KEY || process.env.GOOGLE_AI_API_KEY;
 
-if (!process.env.GOOGLE_GENAI_API_KEY) {
-  throw new Error("GOOGLE_GENAI_API_KEY is missing. Please set it in backend/.env");
+if (!genAiApiKey) {
+  throw new Error(
+    "Google API key is missing. Set GOOGLE_GENAI_API_KEY (preferred) or GOOGLE_AI_API_KEY in backend/.env"
+  );
 }
-const genAI = new GoogleGenerativeAI(process.env.GOOGLE_GENAI_API_KEY);
+const genAI = new GoogleGenerativeAI(genAiApiKey);
+
+const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+function isRetryableAiError(error) {
+  const status = Number(error?.status);
+  if (status === 429 || status === 503) return true;
+  const message = String(error?.message || "");
+  return message.includes("high demand") || message.includes("RESOURCE_EXHAUSTED");
+}
+
+function isQuotaExceededError(error) {
+  const status = Number(error?.status);
+  const message = String(error?.message || "").toLowerCase();
+  const reason = error?.errorDetails?.find?.((d) => d?.reason)?.reason;
+  return (
+    status === 429 ||
+    reason === "RESOURCE_EXHAUSTED" ||
+    message.includes("too many requests") ||
+    message.includes("quota exceeded")
+  );
+}
+
+function normalizeModelName(modelName) {
+  const normalized = String(modelName || "").trim();
+  // Gemini model ids do not contain whitespace. Ignore accidental sentences like "You can use flash 2.5".
+  if (!normalized || /\s/.test(normalized)) return null;
+  return normalized;
+}
+
+function getModelCandidates() {
+  const primaryModel = normalizeModelName(process.env.GEMINI_MODEL) || "gemini-2.5-flash";
+  const candidates = [
+    primaryModel,
+    normalizeModelName(process.env.GEMINI_FALLBACK_MODEL),
+    "gemini-2.0-flash",
+    "gemini-2.0-flash-lite-001",
+    "gemini-2.0-flash-lite",
+    "gemini-flash-latest",
+    "gemini-flash-lite-latest",
+    "gemini-2.5-flash",
+    "gemini-2.5-flash-lite",
+  ]
+    .filter(Boolean)
+    .filter((value, index, array) => array.indexOf(value) === index);
+  return { primaryModel, candidates };
+}
+
+async function generateJsonFromModels({ prompt, responseSchema }) {
+  const { primaryModel, candidates } = getModelCandidates();
+  let result;
+  let lastError;
+
+  for (const modelName of candidates) {
+    const model = genAI.getGenerativeModel({ model: modelName });
+    const maxAttempts = modelName === primaryModel ? 3 : 2;
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      try {
+        result = await model.generateContent({
+          contents: [{ role: "user", parts: [{ text: prompt }] }],
+          generationConfig: {
+            responseMimeType: "application/json",
+            responseSchema,
+          },
+        });
+        break;
+      } catch (error) {
+        lastError = error;
+        if (isQuotaExceededError(error)) {
+          break;
+        }
+        const shouldRetry = isRetryableAiError(error) && attempt < maxAttempts;
+        if (!shouldRetry) {
+          break;
+        }
+        await wait(700 * attempt);
+      }
+    }
+    if (result) break;
+  }
+
+  if (!result) {
+    throw lastError || new Error("Failed to generate content with all configured models.");
+  }
+
+  const text = result.response.text();
+  return parseJsonResponse(text);
+}
 
 function parseJsonResponse(text) {
   try {
@@ -56,10 +146,6 @@ async function generateInterviewReport({resume, jobDescription, selfDescription}
     Resume: ${resume}
     Job Description: ${jobDescription}
     Self-description: ${selfDescription} `;
-
- const model = genAI.getGenerativeModel({
-    model: process.env.GEMINI_MODEL || "gemini-2.5-flash",
- });
 
  const responseSchema = {
     type: "object",
@@ -116,16 +202,7 @@ async function generateInterviewReport({resume, jobDescription, selfDescription}
     required: ["matchScore", "technicalQuestions", "behavioralQuestions", "skillGaps", "preparationPlan"],
  };
 
- const result = await model.generateContent({
-    contents: [{ role: "user", parts: [{ text: prompt }] }],
-    generationConfig: {
-      responseMimeType: "application/json",
-      responseSchema,
-    },
- });
-
- const text = result.response.text();
- const parsed = parseJsonResponse(text);
+ const parsed = await generateJsonFromModels({ prompt, responseSchema });
  return interviewReportSchema.parse(parsed);
 }
 
@@ -145,9 +222,9 @@ async function generatePdfFromHtml(htmlContent){
    const browser = await puppeteer.launch(launchOptions);
    const page = await browser.newPage();
    await page.setContent(htmlContent, { waitUntil: "networkidle0", timeout: 30000 });
-   const pdfBuffer = await page.pdf({ format: "A4", printBackground: true });
+   const pdfOutput = await page.pdf({ format: "A4", printBackground: true });
    await browser.close();
-   return pdfBuffer;
+   return Buffer.isBuffer(pdfOutput) ? pdfOutput : Buffer.from(pdfOutput);
 }
 
 async function generateResumePdf({resume, selfDescription, jobDescription}){
@@ -166,25 +243,20 @@ Resume: ${resume}
 Self-description: ${selfDescription}
 Job Description: ${jobDescription}`;
     
-    const response = await genAI.getGenerativeModel({
-        model: process.env.GEMINI_MODEL || "gemini-2.5-flash",
-     }).generateContent({
-        contents: [{ role: "user", parts: [{ text: prompt }] }],
-        generationConfig: {
-          responseMimeType: "application/json",
-          responseSchema: {
-            type: "object",
-            properties: {
-              html: { type: "string" },
-            },
-            required: ["html"],
-          },
+    const parsed = await generateJsonFromModels({
+      prompt,
+      responseSchema: {
+        type: "object",
+        properties: {
+          html: { type: "string" },
         },
-     })
-
-     const text = response.response.text();
-     const parsed = parseJsonResponse(text);
-     const html = parsed.html;
+        required: ["html"],
+      },
+    });
+     const html = typeof parsed?.html === "string" ? parsed.html : "";
+     if (!html.trim()) {
+      throw new Error("AI returned empty HTML for resume PDF generation.");
+     }
      const pdfBuffer = await generatePdfFromHtml(html);
      return { html, pdfBuffer };
 
